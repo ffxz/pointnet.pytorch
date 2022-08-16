@@ -7,7 +7,7 @@ import numpy as np
 import sys
 from tqdm import tqdm 
 import json
-from plyfile import PlyData, PlyElement
+# from plyfile import PlyData, PlyElement
 
 def get_segmentation_classes(root):
     catfile = os.path.join(root, 'synsetoffset2category.txt')
@@ -56,7 +56,7 @@ def gen_modelnet_id(root):
 class ShapeNetDataset(data.Dataset):
     def __init__(self,
                  root,
-                 npoints=2500,
+                 npoints=2500*2,
                  classification=False,
                  class_choice=None,
                  split='train',
@@ -108,8 +108,11 @@ class ShapeNetDataset(data.Dataset):
 
     def __getitem__(self, index):
         fn = self.datapath[index]
+        # 大的类别
         cls = self.classes[self.datapath[index][0]]
+        # 点的xyz坐标
         point_set = np.loadtxt(fn[1]).astype(np.float32)
+        # 每个点对应的分割类别
         seg = np.loadtxt(fn[2]).astype(np.int64)
         #print(point_set.shape, seg.shape)
 
@@ -117,6 +120,7 @@ class ShapeNetDataset(data.Dataset):
         #resample
         point_set = point_set[choice, :]
 
+        # 这是一个归一化的过程，那么存储xyz的时候可以直接存储原始数据
         point_set = point_set - np.expand_dims(np.mean(point_set, axis = 0), 0) # center
         dist = np.max(np.sqrt(np.sum(point_set ** 2, axis = 1)),0)
         point_set = point_set / dist #scale
@@ -191,9 +195,121 @@ class ModelNetDataset(data.Dataset):
     def __len__(self):
         return len(self.fns)
 
+
+class SongDianLineDataset(data.Dataset):
+    def __init__(self,
+                 root,
+                 npoints=2500,
+                 classification=False,
+                 class_choice=None,
+                 split='train',
+                 data_augmentation=True):
+        self.npoints = npoints
+        self.root = root
+        self.catfile = os.path.join(self.root, 'class_morethan4.pts')
+        self.cat = {}
+        self.cat_list = []
+        self.data_augmentation = data_augmentation
+        self.classification = classification
+        self.seg_classes = {}
+
+        with open(self.catfile, 'r') as f:
+            for line in f:
+                ls = line.strip().split()
+                # self.cat[ls[0]] = ls[1]
+                self.cat_list.append(ls[0])
+
+
+        # # print(self.cat)
+        # if not class_choice is None:
+        #     self.cat = {k: v for k, v in self.cat.items() if k in class_choice}
+        #
+        # self.id2cat = {v: k for k, v in self.cat.items()}
+        self.datapath = []
+        for item in self.cat_list:
+            self.datapath.append((0, item, item.replace('points', 'points_label')))
+        print('...')
+        # self.meta = {}
+        # splitfile = os.path.join(self.root, 'class_morethan4.pts') #os.path.join(self.root, 'train_test_split', 'shuffled_{}_file_list.json'.format(split))
+        # # from IPython import embed; embed()
+        # filelist = json.load(open(splitfile, 'r'))
+        # for item in self.cat:
+        #     self.meta[item] = []
+        #
+        # for file in filelist:
+        #     _, category, uuid = file.split('/')
+        #     if category in self.cat.values():
+        #         self.meta[self.id2cat[category]].append((os.path.join(self.root, category, 'points', uuid + '.pts'),
+        #                                                  os.path.join(self.root, category, 'points_label',
+        #                                                               uuid + '.seg')))
+        #
+        # self.datapath = []
+        # for item in self.cat:
+        #     for fn in self.meta[item]:
+        #         self.datapath.append((item, fn[0], fn[1]))
+        #
+        # self.classes = dict(zip(sorted(self.cat), range(len(self.cat))))
+        # print(self.classes)
+        # with open(os.path.join(os.path.dirname(os.path.realpath(__file__)), '../misc/num_seg_classes.txt'), 'r') as f:
+        #     for line in f:
+        #         ls = line.strip().split()
+        #         self.seg_classes[ls[0]] = int(ls[1])
+        self.num_seg_classes = 20#17#self.seg_classes[list(self.cat.keys())[0]]
+        # print(self.seg_classes, self.num_seg_classes)
+
+    def __getitem__(self, index):
+        fn = self.datapath[index]
+        # 大的类别
+        # cls = self.classes[self.datapath[index][0]]
+        # 点的xyz坐标
+        point_set = np.loadtxt(fn[1]).astype(np.float32)
+        # 每个点对应的分割类别
+        seg = np.loadtxt(fn[2]).astype(np.int64)
+        # print(point_set.shape, seg.shape)
+
+        # random choice for fixed training 3d point
+        choice = np.random.choice(len(seg), self.npoints, replace=True)
+        # resample
+        point_set = point_set[choice, :]
+
+        # 这是一个归一化的过程，那么存储xyz的时候可以直接存储原始数据
+        point_set = point_set - np.expand_dims(np.mean(point_set, axis=0), 0)  # center
+        dist = np.max(np.sqrt(np.sum(point_set ** 2, axis=1)), 0)
+        point_set = point_set / dist  # scale
+
+        if self.data_augmentation:
+            theta = np.random.uniform(0, np.pi * 2)
+            rotation_matrix = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
+            point_set[:, [0, 2]] = point_set[:, [0, 2]].dot(rotation_matrix)  # random rotation
+            point_set += np.random.normal(0, 0.02, size=point_set.shape)  # random jitter
+
+        seg = seg[choice]
+        point_set = torch.from_numpy(point_set)
+        seg = torch.from_numpy(seg)
+        # cls = torch.from_numpy(np.array([cls]).astype(np.int64))
+
+        if self.classification:
+            return point_set, cls
+        else:
+            return point_set, seg
+
+    def __len__(self):
+        return len(self.datapath)
+
+
+
+
+
+
+
+
 if __name__ == '__main__':
-    dataset = sys.argv[1]
-    datapath = sys.argv[2]
+    dataset = 'songdian'#sys.argv[1]
+    datapath = '/data/libin/pointnet/songdianline2/Z131'##sys.argv[2]
+
+    if dataset == 'songdian':
+        d = SongDianLineDataset(root=datapath)
+        print(len(d))
 
     if dataset == 'shapenet':
         d = ShapeNetDataset(root = datapath, class_choice = ['Chair'])
